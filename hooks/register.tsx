@@ -8,6 +8,8 @@ import type { Backend, Op } from './store'
 const PANE = 'keysafe'
 const names = atom({ plugin: 'keysafe', key: 'names' } as const, [])
 const draft = atom({ plugin: 'keysafe', key: 'draft' } as const, '')
+// The name confirmed with Enter; the form then asks for its value.
+const pending = atom({ plugin: 'keysafe', key: 'pending' } as const, '')
 const notice = atom({ plugin: 'keysafe', key: 'notice' } as const, '')
 // The secure store in use, as the pane names it; '' when this machine has none.
 const storeLabel = atom({ plugin: 'keysafe', key: 'store' } as const, '')
@@ -206,17 +208,19 @@ export const register: Register = on => {
     const Input = 'Input' in els ? els.Input : undefined
     const list = await read($, names)
     const name = await read($, draft)
+    const chosen = await read($, pending)
     const note = await read($, notice)
     const where = await read($, storeLabel)
     // Notices carry their tone as a leading mark: ✓ success, ✗ error.
     const tone = note.startsWith('✓') ? 'success' : note.startsWith('✗') ? 'error' : 'subtle'
     const say = (text: string) => void update($, notice, () => text)
+    const focus = (key: string) => void $.ui.focus({ requestId: PANE, key }).catch(() => undefined)
 
     const header = (
       <Box flexDirection="row" justifyContent="space-between">
-        <Text bold color="claude">🔒 Keysafe</Text>
+        <Text bold color="claude">Keysafe</Text>
         <Text color="subtle">
-          {list.length} {list.length === 1 ? 'key' : 'keys'} · {where || 'no secure store'}
+          {where || 'no secure store'} · {list.length} {list.length === 1 ? 'key' : 'keys'}
         </Text>
       </Box>
     )
@@ -224,17 +228,11 @@ export const register: Register = on => {
     const keys = (
       <Box flexDirection="column" borderStyle="round" borderColor="subtle" paddingX={1} marginTop={1}>
         {list.length === 0 ? (
-          <Box flexDirection="column">
-            <Text color="subtle">No keys stored yet.</Text>
-            <Text color="subtle" italic>Add one below, or paste a key into a prompt.</Text>
-          </Box>
+          <Text color="subtle">No keys yet. Add one below, or paste a key into a prompt.</Text>
         ) : (
           list.map(n => (
             <Box flexDirection="row" justifyContent="space-between">
-              <Text>
-                <Text color="success">● </Text>
-                <Text mono>${n}</Text>
-              </Text>
+              <Text mono>${n}</Text>
               {Input && (
                 <Button
                   key={`rm:${n}`}
@@ -251,9 +249,8 @@ export const register: Register = on => {
     )
 
     const footer = (
-      <Box flexDirection="column" marginTop={1}>
-        <Text color="subtle">Claude uses keys as $NAME in Bash.</Text>
-        <Text color="subtle">Values never reach the model; output shows [keysafe:NAME].</Text>
+      <Box marginTop={1}>
+        <Text color="subtle">Claude uses keys as $NAME in Bash and only ever sees [keysafe:NAME].</Text>
       </Box>
     )
 
@@ -262,12 +259,12 @@ export const register: Register = on => {
         <Box flexDirection="column" paddingX={2}>
           {header}
           {keys}
-          <Text color="subtle" italic>Add keys from the terminal with /keysafe.</Text>
+          <Box marginTop={1}>
+            <Text color="subtle">Add keys from the terminal with /keysafe.</Text>
+          </Box>
         </Box>
       )
     }
-
-    const env = toEnvName(name)
 
     if (where === '') {
       return (
@@ -285,48 +282,84 @@ export const register: Register = on => {
       )
     }
 
+    const env = toEnvName(name)
+
+    // Step 1: the name. Enter confirms it and moves to the value; the name stays.
+    const nameStep = (
+      <Box flexDirection="column">
+        <Input
+          key="name"
+          label="Name   "
+          placeholder="STRIPE_SECRET_KEY"
+          value={name}
+          submitLabel="next"
+          autoFocus
+          onInput={(v: string) => void update($, draft, () => v)}
+          onSubmit={async (v: string) => {
+            await update($, draft, () => v)
+            const typed = toEnvName(v)
+            if (!typed) return say('✗ Use letters, digits and _ for the name.')
+            if ((await read($, names)).includes(typed)) return say(`✗ $${typed} already exists. Remove it first or pick another name.`)
+            say('')
+            await update($, pending, () => typed)
+            focus('value')
+          }}
+        />
+        {name !== '' && env !== name && (
+          <Text color={env ? 'subtle' : 'warning'}>{env ? `         saves as $${env}` : '         use letters, digits and _'}</Text>
+        )}
+      </Box>
+    )
+
+    // Step 2: the value, with the chosen name shown above it.
+    const valueStep = (
+      <Box flexDirection="column">
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text>
+            <Text color="subtle">Name   </Text>
+            <Text mono bold>${chosen}</Text>
+          </Text>
+          <Button
+            key="rename"
+            label="change"
+            variant="secondary"
+            dimColor
+            onPress={async () => {
+              await update($, pending, () => '')
+              focus('name')
+            }}
+          />
+        </Box>
+        <Input
+          key="value"
+          label="Value  "
+          placeholder="paste the key"
+          value=""
+          submitLabel="save"
+          autoFocus
+          onSubmit={async (v: string) => {
+            const secret = v.trim()
+            if (!secret) return say('✗ The value is empty.')
+            const ok = await saveKey($, chosen, secret)
+            if (!ok) return say(`✗ Could not save $${chosen} to ${where}. It may already exist.`)
+            await update($, draft, () => '')
+            await update($, pending, () => '')
+            say(`✓ Saved $${chosen}`)
+            focus('name')
+          }}
+        />
+      </Box>
+    )
+
     return (
       <Box flexDirection="column" paddingX={2}>
         {header}
         {keys}
-        <Box flexDirection="column" borderStyle="round" borderColor="claude" paddingX={1} marginTop={1}>
+        <Box flexDirection="column" marginTop={1}>
           <Text bold>Add a key</Text>
-          <Input
-            key="name"
-            label="Name   "
-            placeholder="STRIPE_SECRET_KEY"
-            value={name}
-            submitLabel="next"
-            onInput={(v: string) => void update($, draft, () => v)}
-            onSubmit={(v: string) => void update($, draft, () => v)}
-          />
-          {name !== '' && env !== name && (
-            <Text color={env ? 'subtle' : 'warning'}>
-              {env ? `  saves as $${env}` : '  use letters, digits and _'}
-            </Text>
-          )}
-          <Input
-            key="value"
-            label="Value  "
-            placeholder="paste the key, Enter to save"
-            value=""
-            submitLabel="save"
-            onSubmit={async (v: string) => {
-              const secret = v.trim()
-              if (!env) return say('✗ Enter a name first (letters, digits, _).')
-              if (!secret) return say('✗ The value is empty.')
-              if (list.includes(env)) return say(`✗ $${env} already exists. Remove it first or pick another name.`)
-              const ok = await saveKey($, env, secret)
-              await update($, draft, () => '')
-              say(ok ? `✓ Saved $${env}` : `✗ Could not write $${env} to ${where || 'a secure store'}.`)
-            }}
-          />
+          {chosen === '' ? nameStep : valueStep}
+          {note !== '' && <Text color={tone}>{note}</Text>}
         </Box>
-        {note !== '' && (
-          <Box marginTop={1}>
-            <Text color={tone}>{note}</Text>
-          </Box>
-        )}
         {footer}
       </Box>
     )

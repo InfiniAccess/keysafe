@@ -25,7 +25,7 @@ claude plugin install keysafe --marketplace InfiniAccess/keysafe
 
 ## Use
 
-- `/keysafe` opens the pane: your stored key names, a remove button for each, and a form to add one (name, then value).
+- `/keysafe` opens the pane: your stored key names, a remove button for each, and a form to add one: type the name, press Enter, then paste the value.
 - Or paste a key into a prompt and pick **Store as $NAME**.
 - Then ask Claude to use it, e.g. "call the Stripe API with `$STRIPE_SECRET_KEY`".
 
