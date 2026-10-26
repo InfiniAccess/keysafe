@@ -1,6 +1,6 @@
 {
   "name": "keysafe",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Keep API keys in your OS secure store (macOS Keychain, Linux Secret Service, Windows Credential Manager); Claude uses them as $NAME in Bash and never sees the values",
   "types": "./types/index.d.ts"
 }

@@ -69,3 +69,19 @@ export function envPrefix(b: Backend, names: readonly string[], ps1: string, com
       : `secret-tool lookup service ${SERVICE} account ${n} 2>/dev/null`
   return names.map(n => `export ${n}="$(${lookup(n)})"`).join('; ')
 }
+
+/** Lists the store's item names without reading any value; undefined where the store can't list. */
+export function listOp(b: Backend): Op | undefined {
+  return b === 'macos' ? { argv: ['security', 'dump-keychain'] } : undefined
+}
+
+/** The Keysafe account names in `security dump-keychain` output (attributes only, no secrets). */
+export function parseKeychainNames(dump: string): string[] {
+  const found = new Set<string>()
+  for (const item of dump.split(/^keychain: /m)) {
+    if (!item.includes(`"svce"<blob>="${SERVICE}"`)) continue
+    const acct = /"acct"<blob>="([A-Za-z_][A-Za-z0-9_]*)"/.exec(item)?.[1]
+    if (acct) found.add(acct)
+  }
+  return [...found].sort()
+}

@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import { detectKeys, mask, redactBlocks, toEnvName, uniqueName } from './lib'
-import { BACKEND_LABEL, backendFor, deleteOp, envPrefix, readOp, saveOp } from './store'
+import { BACKEND_LABEL, backendFor, deleteOp, envPrefix, listOp, parseKeychainNames, readOp, saveOp } from './store'
 import type { Backend, Op } from './store'
 
 const PANE = 'keysafe'
@@ -79,9 +79,14 @@ export const register: Register = on => {
     await update($, storeLabel, () => (backend ? BACKEND_LABEL[backend] : ''))
 
     // The plugin store keeps names only; the OS store holds the values.
+    // The store's own listing adds keys saved by an earlier install or another
+    // copy of Keysafe, so the pane never comes up empty while the keys exist.
     const stored = ((await $.store.get('names')) as string[] | undefined) ?? []
+    const list = backend ? listOp(backend) : undefined
+    const listed = list ? await run($, list) : undefined
+    const discovered = listed?.exitCode === 0 ? parseKeychainNames(listed.stdout) : []
     const live: string[] = []
-    for (const name of stored) {
+    for (const name of [...new Set([...stored, ...discovered])].sort()) {
       const value = await readSecret($, name)
       if (value !== undefined) {
         values.set(name, value)
