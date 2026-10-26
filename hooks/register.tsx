@@ -70,36 +70,43 @@ async function removeKey($: $, name: string): Promise<void> {
   await $.store.set('names', list)
 }
 
+// Rebuilds the key list from the OS store. Runs at session start and each time
+// the pane opens, so a reload, a reinstall or a rename made outside Keysafe
+// never leaves the pane showing a stale list.
+async function sync($: $): Promise<void> {
+  ps1 = `${$.plugin.root}/scripts/keysafe.ps1`
+  backend ??= await detectBackend($)
+  await update($, storeLabel, () => (backend ? BACKEND_LABEL[backend] : ''))
+
+  // The plugin store keeps names only; the OS store holds the values. The
+  // store's own listing adds keys saved by an earlier install or another copy.
+  const stored = ((await $.store.get('names')) as string[] | undefined) ?? []
+  const list = backend ? listOp(backend) : undefined
+  const listed = list ? await run($, list) : undefined
+  const discovered = listed?.exitCode === 0 ? parseKeychainNames(listed.stdout) : []
+  const live: string[] = []
+  values.clear()
+  for (const name of [...new Set([...stored, ...discovered])].sort()) {
+    const value = await readSecret($, name)
+    if (value !== undefined) {
+      values.set(name, value)
+      live.push(name)
+    }
+  }
+  await update($, names, () => live)
+  if (backend) await $.store.set('names', live)
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'keysafe', description: 'Open the Keysafe pane to add or remove keys' })
 
-    ps1 = `${$.plugin.root}/scripts/keysafe.ps1`
-    backend = await detectBackend($)
-    await update($, storeLabel, () => (backend ? BACKEND_LABEL[backend] : ''))
-
-    // The plugin store keeps names only; the OS store holds the values.
-    // The store's own listing adds keys saved by an earlier install or another
-    // copy of Keysafe, so the pane never comes up empty while the keys exist.
-    const stored = ((await $.store.get('names')) as string[] | undefined) ?? []
-    const list = backend ? listOp(backend) : undefined
-    const listed = list ? await run($, list) : undefined
-    const discovered = listed?.exitCode === 0 ? parseKeychainNames(listed.stdout) : []
-    const live: string[] = []
-    for (const name of [...new Set([...stored, ...discovered])].sort()) {
-      const value = await readSecret($, name)
-      if (value !== undefined) {
-        values.set(name, value)
-        live.push(name)
-      }
-    }
-    await update($, names, () => live)
-    if (backend) await $.store.set('names', live)
-
+    await sync($)
     return next(e)
   })
 
   on('command.run', { command: 'keysafe' }, async $ => {
+    await sync($)
     await $.ui.open({ id: PANE, title: 'Keysafe' })
     return { text: 'Keysafe pane opened.' }
   })
